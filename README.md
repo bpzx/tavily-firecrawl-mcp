@@ -31,7 +31,7 @@ API key 从环境变量读取。未配置 key 的 provider 会被直接跳过,�
 # 已发布到 PyPI 时
 uvx tavily-firecrawl-mcp
 
-# 未发布时,直接从 git 仓库运行(把 bpx/web-fetch-mcp 换成你的仓库地址)
+# 或者直接从 git 仓库运行
 uvx --from "git+https://github.com/bpx/tavily-firecrawl-mcp" tavily-firecrawl-mcp
 ```
 
@@ -136,7 +136,7 @@ export WEB_FETCH_PROXY=http://127.0.0.1:7890
 }
 ```
 
-> 如果还没发布到 PyPI,改为从 git 运行(把 `bpx/tavily-firecrawl-mcp` 换成你的仓库地址):
+> 【可选】从 git 运行:
 > ```json
 > "args": ["--from", "git+https://github.com/bpx/tavily-firecrawl-mcp", "tavily-firecrawl-mcp"]
 > ```

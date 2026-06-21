@@ -1,0 +1,57 @@
+name: Publish to PyPI
+
+# Triggered when a GitHub Release is published (or re-published).
+# Uses PyPI Trusted Publishing (OIDC) — no API token needed.
+on:
+  release:
+    types: [published]
+
+# Required by PyPI's trusted publisher flow: the job must request the
+# `id-token: write` permission and run inside the named environment.
+permissions:
+  id-token: write
+
+# Prevent two releases from racing to upload the same files.
+concurrency:
+  group: publish-pypi
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Build sdist + wheel
+        run: uv build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # Must match the Environment name you registered with PyPI.
+    environment:
+      name: pypi
+      # Optional but recommended: only publish tagged releases.
+      url: https://pypi.org/project/tavily-firecrawl-mcp/
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        run: uv publish
