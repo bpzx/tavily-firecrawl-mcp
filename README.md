@@ -3,7 +3,7 @@
 一个用于网页抓取和搜索的 [MCP](https://modelcontextprotocol.io)(Model Context Protocol)服务器。
 
 - **`web_fetch`** —— 把网页正文提取为 Markdown(或纯文本)。以 **Tavily Extract** 为主用,失败或返回空时**自动回退**到 **Firecrawl Scrape**。
-- **`web_search`** —— 用 **Tavily Search** 搜索网页(返回标题、URL、摘要,可选合成答案)。无备用。
+- **`web_search`** —— 搜索网页,返回标题、URL、摘要(Tavily 可选合成答案)。以 **Tavily Search** 为主用,可重试错误自动回退到 **Firecrawl Search**。
 
 API key 从环境变量读取。未配置 key 的 provider 会被直接跳过,不会向它发起任何请求。
 
@@ -17,7 +17,7 @@ API key 从环境变量读取。未配置 key 的 provider 会被直接跳过,�
 
 - Python ≥ 3.11
 - [Tavily](https://tavily.com) API key(`TAVILY_API_KEY`)
-- 可选:[Firecrawl](https://firecrawl.dev) API key(`FIRECRAWL_API_KEY`),用于抓取回退。不配则 `web_fetch` 仅用 Tavily。
+- 可选:[Firecrawl](https://firecrawl.dev) API key(`FIRECRAWL_API_KEY`),用于抓取/搜索回退。不配则仅用 Tavily。
 
 ## 运行方式
 
@@ -32,7 +32,7 @@ API key 从环境变量读取。未配置 key 的 provider 会被直接跳过,�
 uvx tavily-firecrawl-mcp
 
 # 或者直接从 git 仓库运行
-uvx --from "git+https://github.com/bpx/tavily-firecrawl-mcp" tavily-firecrawl-mcp
+uvx --from "git+https://github.com/bpzx/tavily-firecrawl-mcp" tavily-firecrawl-mcp
 ```
 
 > uvx 会根据 `pyproject.toml` 的 `[project.scripts]` 入口点(`tavily-firecrawl-mcp = tavily_firecrawl_mcp.server:main`)找到并运行服务。首次运行会自动创建隔离环境并安装依赖。
@@ -74,7 +74,16 @@ export FIRECRAWL_API_KEY=fc-xxxxxxxxxxxx   # 可选
 export WEB_FETCH_PROXY=http://127.0.0.1:7890
 ```
 
-设置 `WEB_FETCH_PROXY` 后它优先级最高,并禁用 httpx 的环境变量回退;未设置时,httpx 仍会读取标准的 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 环境变量。
+设置 `WEB_FETCH_PROXY` 后它优先级最高,并禁用 httpx 的环境变量回退;未设置时,httpx 仍会读取标准的 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 环境变量。若这些环境变量里存在 httpx 无法解析的值(例如 `NO_PROXY` 中的 IPv6 写法 `[::1]`),服务会降级为直连并在日志中告警,而不是崩溃。
+
+### 自托管端点(可选)
+
+Firecrawl 支持自托管。如需将请求指向私有部署,设置对应的 base URL(值末尾的 `/` 会被自动去掉):
+
+```bash
+export FIRECRAWL_BASE_URL=https://firecrawl.internal.example.com
+export TAVILY_BASE_URL=https://tavily-proxy.internal.example.com   # 如需代理 Tavily 端点
+```
 
 ## 工具
 
@@ -98,18 +107,19 @@ export WEB_FETCH_PROXY=http://127.0.0.1:7890
 | ---------------- | ----------------------- | ---------- | ----------------------------- |
 | `query`          | `str`                   | 必填       | 搜索词。                      |
 | `max_results`    | `int`                   | `5`        | 结果数量(1–20)。             |
-| `search_depth`   | `"basic" \| "advanced"` | `"basic"`  | advanced 更慢但更深入。       |
-| `topic`          | `"general" \| "news"`   | `"general"`| 切换为新闻搜索。              |
-| `include_answer` | `bool`                  | `False`    | 是否同时返回合成答案。        |
+| `search_depth`   | `"basic" \| "advanced"` | `"basic"`  | 仅 Tavily;advanced 更慢但更深入。 |
+| `topic`          | `"general" \| "news"`   | `"general"`| 仅 Tavily;切换为新闻搜索。    |
+| `include_answer` | `bool`                  | `False`    | 仅 Tavily;是否同时返回合成答案。 |
 
-返回 `{ ok, query, answer, results: [{title, url, content, score}] }`。
+返回 `{ ok, query, provider, used_fallback, failed_providers, answer, results: [{title, url, content, score}] }`。
+`answer` 仅由 Tavily 产生(Firecrawl 无答案合成);当结果由 Firecrawl 在 Tavily 失败后产出时,`used_fallback` 为 `true`。
 
 ## 回退机制说明
 
-`web_fetch` 按顺序遍历 provider 链:**Tavily → Firecrawl**。
+`web_fetch` 与 `web_search` 都按顺序遍历 provider 链:**Tavily → Firecrawl**。
 
-1. 若 Tavily 已配置且返回非空内容 → 直接返回。
-2. 若 Tavily 因*可重试*错误失败(auth、限流、5xx、网络、空内容)且 Firecrawl 已配置 → 尝试 Firecrawl,标记 `used_fallback: true`,并把 Tavily 的失败记录写入 `failed_providers`。
+1. 若 Tavily 已配置且返回非空结果 → 直接返回。
+2. 若 Tavily 因*可重试*错误(auth、限流、5xx、网络、空内容)失败且 Firecrawl 已配置 → 尝试 Firecrawl,标记 `used_fallback: true`,并把 Tavily 的失败记录写入 `failed_providers`。
 3. *不可重试*错误(如 404)会立即抛出,不尝试备用。
 4. 所有 provider 都失败或都未配置时,工具返回 `ok: false` 及结构化的 `failures` 列表,便于调用方处理。
 
@@ -117,20 +127,24 @@ export WEB_FETCH_PROXY=http://127.0.0.1:7890
 
 ## 客户端配置
 
-### ZCode(`~/.zcode/mcp.json` 或项目内 `.zcode/mcp.json`)
+### ZCode(`~/.zcode/cli/config.json` 用户级,或项目内 `<repo>/.zcode/config.json`)
 
-> 注意:ZCode 的配置文件格式与 Claude Desktop **不同** —— 顶层的 key 直接就是每个 server 的名字,**没有 `mcpServers` 外层包裹**,且每个 server 对象里需要带 `"type": "stdio"`。
+> 注意:ZCode 的 MCP 配置嵌套在 `mcp.servers` 下;所有作用域的 server 在会话启动时自动连接。状态与修复入口在客户端的 **Settings → MCP**。
 
 ```json
 {
-  "tavily-firecrawl": {
-    "type": "stdio",
-    "command": "uvx",
-    "args": ["tavily-firecrawl-mcp"],
-    "env": {
-      "TAVILY_API_KEY": "tvly-xxxxxxxxxxxx",
-      "FIRECRAWL_API_KEY": "fc-xxxxxxxxxxxx",
-      "WEB_FETCH_PROXY": "http://127.0.0.1:7890"
+  "mcp": {
+    "servers": {
+      "tavily-firecrawl": {
+        "type": "stdio",
+        "command": "uvx",
+        "args": ["tavily-firecrawl-mcp"],
+        "env": {
+          "TAVILY_API_KEY": "tvly-xxxxxxxxxxxx",
+          "FIRECRAWL_API_KEY": "fc-xxxxxxxxxxxx",
+          "WEB_FETCH_PROXY": "http://127.0.0.1:7890"
+        }
+      }
     }
   }
 }
@@ -138,7 +152,7 @@ export WEB_FETCH_PROXY=http://127.0.0.1:7890
 
 > 【可选】从 git 运行:
 > ```json
-> "args": ["--from", "git+https://github.com/bpx/tavily-firecrawl-mcp", "tavily-firecrawl-mcp"]
+> "args": ["--from", "git+https://github.com/bpzx/tavily-firecrawl-mcp", "tavily-firecrawl-mcp"]
 > ```
 
 ### Claude Desktop / Claude Code(`claude_desktop_config.json`)
@@ -170,11 +184,21 @@ export WEB_FETCH_PROXY=http://127.0.0.1:7890
 
 确保服务端继承的环境中已导出 `TAVILY_API_KEY`(以及可选的 `FIRECRAWL_API_KEY` / `WEB_FETCH_PROXY`)。
 
+## 日志与诊断
+
+服务通过 stdio 传输运行:**stdout 仅承载 JSON-RPC**,所有诊断日志写入 stderr。日志级别可通过 `LOG_LEVEL` 环境变量调整(默认 `INFO`):
+
+```bash
+export LOG_LEVEL=DEBUG
+```
+
 ## 开发
 
 ```bash
 pip install -e ".[dev]"
 pytest
+ruff check src tests
+mypy src
 ```
 
 ## 许可证

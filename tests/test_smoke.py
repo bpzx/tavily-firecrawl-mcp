@@ -6,8 +6,6 @@ so CI always has something meaningful to run.
 
 from __future__ import annotations
 
-import pytest
-
 import tavily_firecrawl_mcp
 from tavily_firecrawl_mcp import __version__
 from tavily_firecrawl_mcp.errors import FetchError, ProviderError
@@ -47,3 +45,13 @@ def test_providers_skip_when_no_env(monkeypatch):
 def test_error_types_subclass_exception():
     assert issubclass(FetchError, Exception)
     assert issubclass(ProviderError, Exception)
+
+
+async def test_server_module_imports_and_registers_tools():
+    # Regression guard for dependency breakages (e.g. mcp 2.x renaming
+    # FastMCP) that used to crash at import time and kill the stdio server.
+    from tavily_firecrawl_mcp.server import mcp
+
+    tools = await mcp.list_tools()
+    names = {tool.name for tool in tools}
+    assert {"web_fetch", "web_search"} <= names
