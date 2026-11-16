@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -56,9 +59,7 @@ class SearchResult:
 # ---------------------------------------------------------------------------
 
 
-def make_client(
-    timeout: float, proxy: str | None = None
-) -> httpx.AsyncClient:
+def make_client(timeout: float, proxy: str | None = None) -> httpx.AsyncClient:
     """Create a shared AsyncClient with sensible defaults.
 
     follow_redirects is on so short-link / moved URLs resolve transparently.
@@ -75,14 +76,25 @@ def make_client(
     kwargs: dict[str, Any] = {
         "timeout": httpx.Timeout(timeout, connect=10.0),
         "follow_redirects": True,
-        "headers": {
-            "User-Agent": "tavily-firecrawl-mcp/0.1 (+https://modelcontextprotocol.io)"
-        },
+        "headers": {"User-Agent": "tavily-firecrawl-mcp/0.1 (+https://modelcontextprotocol.io)"},
     }
     if proxy:
         kwargs["proxy"] = proxy
         kwargs["trust_env"] = False
-    return httpx.AsyncClient(**kwargs)
+    try:
+        return httpx.AsyncClient(**kwargs)
+    except httpx.InvalidURL as exc:
+        # Some HTTP_PROXY/NO_PROXY values that other tools accept (e.g. the
+        # IPv6 literal "[::1]" in no_proxy) are not valid httpx URL patterns
+        # and raise here during client construction. A broken env proxy config
+        # must not take down the whole server: fall back to direct connection.
+        logger.warning(
+            "Ignoring invalid proxy environment configuration (%s); "
+            "falling back to direct connection.",
+            exc,
+        )
+        kwargs["trust_env"] = False
+        return httpx.AsyncClient(**kwargs)
 
 
 def classify_http_error(provider: str, status_code: int) -> tuple[str, bool]:

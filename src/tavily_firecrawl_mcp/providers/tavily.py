@@ -28,13 +28,17 @@ class TavilyProvider:
 
     name = "tavily"
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, base_url: str = TAVILY_BASE):
         self._api_key = api_key
+        self._base_url = base_url.rstrip("/")
 
     @staticmethod
-    def from_env(env: dict[str, str]) -> "TavilyProvider | None":
+    def from_env(env: dict[str, str]) -> TavilyProvider | None:
         key = env.get("TAVILY_API_KEY", "").strip()
-        return TavilyProvider(key) if key else None
+        if not key:
+            return None
+        base = env.get("TAVILY_BASE_URL", "").strip().rstrip("/")
+        return TavilyProvider(key, base_url=base or TAVILY_BASE)
 
     # ------------------------------------------------------------------ fetch
 
@@ -82,9 +86,7 @@ class TavilyProvider:
                 f"Tavily could not extract content: {detail.get('reason', 'unknown reason')}",
                 retriable=True,
             )
-        raise ProviderError(
-            self.name, "Tavily returned no content", retriable=True
-        )
+        raise ProviderError(self.name, "Tavily returned no content", retriable=True)
 
     # ----------------------------------------------------------------- search
 
@@ -137,22 +139,22 @@ class TavilyProvider:
     ) -> dict[str, Any]:
         try:
             resp = await client.post(
-                f"{TAVILY_BASE}{path}",
-                json={**payload, "api_key": self._api_key},
+                f"{self._base_url}{path}",
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                },
             )
         except httpx.HTTPError as exc:
-            raise ProviderError(
-                self.name, f"network error: {exc!s}", retriable=True
-            ) from exc
+            raise ProviderError(self.name, f"network error: {exc!s}", retriable=True) from exc
 
         if resp.status_code >= 400:
             msg, retriable = classify_http_error(self.name, resp.status_code)
             snippet = _safe_text(resp)
             if snippet:
                 msg = f"{msg} — {snippet}"
-            raise ProviderError(
-                self.name, msg, status_code=resp.status_code, retriable=retriable
-            )
+            raise ProviderError(self.name, msg, status_code=resp.status_code, retriable=retriable)
 
         try:
             return resp.json()

@@ -7,18 +7,6 @@ class WebFetchError(Exception):
     """Base error for all web-fetch failures."""
 
 
-class ProviderDisabledError(WebFetchError):
-    """Raised when a provider is unavailable because its API key is missing."""
-
-    def __init__(self, provider: str, env_var: str):
-        self.provider = provider
-        self.env_var = env_var
-        super().__init__(
-            f"Provider '{provider}' is disabled: environment variable "
-            f"{env_var} is not set."
-        )
-
-
 class ProviderError(WebFetchError):
     """A provider call failed (HTTP error, network error, empty content, ...)."""
 

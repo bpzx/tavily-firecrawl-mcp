@@ -6,10 +6,12 @@ httpx client is shared for the server's lifetime.
 
 from __future__ import annotations
 
+import logging
 import os
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Literal
 
 from mcp.server.fastmcp import Context, FastMCP
 
@@ -21,6 +23,8 @@ from .providers.base import make_client
 
 # Default per-request timeout in seconds.
 DEFAULT_TIMEOUT = 30
+
+logger = logging.getLogger(__name__)
 
 
 def build_fetcher(env: dict[str, str]) -> Fetcher:
@@ -57,7 +61,7 @@ mcp = FastMCP(
 
 
 def _ctx(ctx: Context) -> AppContext:
-    return ctx.request_context.lifespan_context  # type: ignore[no-any-return]
+    return ctx.request_context.lifespan_context
 
 
 def _error_payload(exc: FetchError | ProviderError, url: str) -> dict[str, Any]:
@@ -84,8 +88,8 @@ async def web_fetch(
     ctx: Context,
     *,
     query: str | None = None,
-    format: str = "markdown",
-    extract_depth: str = "basic",
+    format: Literal["markdown", "text"] = "markdown",
+    extract_depth: Literal["basic", "advanced"] = "basic",
     only_main_content: bool = True,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> dict[str, Any]:
@@ -125,9 +129,10 @@ async def web_fetch(
 @mcp.tool(
     name="web_search",
     description=(
-        "Search the web with Tavily and return titles, URLs, and snippets "
-        "(plus an optional synthesized answer). No fallback — requires "
-        "TAVILY_API_KEY in the server's environment."
+        "Search the web and return titles, URLs, and snippets. Tries Tavily "
+        "first (optionally with a synthesized answer); on failure falls back "
+        "to Firecrawl Search. Requires TAVILY_API_KEY and/or FIRECRAWL_API_KEY "
+        "in the server's environment."
     ),
 )
 async def web_search(
@@ -135,18 +140,18 @@ async def web_search(
     ctx: Context,
     *,
     max_results: int = 5,
-    search_depth: str = "basic",
-    topic: str = "general",
+    search_depth: Literal["basic", "advanced"] = "basic",
+    topic: Literal["general", "news"] = "general",
     include_answer: bool = False,
 ) -> dict[str, Any]:
-    """Run a web search.
+    """Search the web.
 
     Args:
         query: The search query.
         max_results: Number of results (1-20, default 5).
-        search_depth: "basic" (default, faster) or "advanced".
-        topic: "general" (default) or "news".
-        include_answer: If True, also return a synthesized answer.
+        search_depth: Tavily only — "basic" (default, faster) or "advanced".
+        topic: Tavily only — "general" (default) or "news".
+        include_answer: Tavily only — also return a synthesized answer.
     """
     app = _ctx(ctx)
     try:
@@ -167,6 +172,13 @@ async def web_search(
 
 def main() -> None:
     """Console-script entry point."""
+    # stdio transport: stdout carries JSON-RPC only, so all diagnostics go to
+    # stderr. LOG_LEVEL accepts standard names (DEBUG/INFO/WARNING/...).
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+        stream=sys.stderr,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
     mcp.run()
 
 

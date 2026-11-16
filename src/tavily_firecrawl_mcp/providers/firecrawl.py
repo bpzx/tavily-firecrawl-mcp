@@ -1,6 +1,7 @@
-"""Firecrawl provider: Scrape (fetch), used as the fallback.
+"""Firecrawl provider: Scrape (fetch fallback) + Search (search fallback).
 
 Docs: https://docs.firecrawl.dev/api-reference/endpoint/scrape
+      https://docs.firecrawl.dev/api-reference/endpoint/search
 """
 
 from __future__ import annotations
@@ -10,24 +11,29 @@ from typing import Any
 import httpx
 
 from ..errors import ProviderError
-from .base import FetchResult, classify_http_error
+from .base import FetchResult, SearchResult, SearchResultItem, classify_http_error
 
 FIRECRAWL_BASE = "https://api.firecrawl.dev"
 SCRAPE_MAX_TIMEOUT = 300  # Firecrawl accepts 1-300s
+SEARCH_MAX_RESULTS = 20
 
 
 class FirecrawlProvider:
-    """Wraps the Firecrawl Scrape endpoint."""
+    """Wraps the Firecrawl Scrape and Search endpoints."""
 
     name = "firecrawl"
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, base_url: str = FIRECRAWL_BASE):
         self._api_key = api_key
+        self._base_url = base_url.rstrip("/")
 
     @staticmethod
-    def from_env(env: dict[str, str]) -> "FirecrawlProvider | None":
+    def from_env(env: dict[str, str]) -> FirecrawlProvider | None:
         key = env.get("FIRECRAWL_API_KEY", "").strip()
-        return FirecrawlProvider(key) if key else None
+        if not key:
+            return None
+        base = env.get("FIRECRAWL_BASE_URL", "").strip().rstrip("/")
+        return FirecrawlProvider(key, base_url=base or FIRECRAWL_BASE)
 
     async def fetch(
         self,
@@ -39,9 +45,9 @@ class FirecrawlProvider:
         timeout: int = 30,
         **_unused: Any,
     ) -> FetchResult:
-        # We always request markdown; if the caller wants text, we still request
-        # markdown and let the orchestrator convert, since Firecrawl's "text"
-        # format is rarely what callers actually want.
+        # Firecrawl's scrape API has no plain-"text" format, so we always
+        # request markdown; when the caller asked for text the orchestrator
+        # (fetcher) strips the markup best-effort before returning.
         payload: dict[str, Any] = {
             "url": url,
             "formats": ["markdown"],
@@ -58,9 +64,7 @@ class FirecrawlProvider:
             content = (page.get("html") or "").strip()
 
         if not content:
-            raise ProviderError(
-                self.name, "Firecrawl returned no content", retriable=False
-            )
+            raise ProviderError(self.name, "Firecrawl returned no content", retriable=False)
 
         meta = page.get("metadata") or {}
         return FetchResult(
@@ -75,6 +79,42 @@ class FirecrawlProvider:
             },
         )
 
+    # ----------------------------------------------------------------- search
+
+    async def search(
+        self,
+        client: httpx.AsyncClient,
+        query: str,
+        *,
+        max_results: int = 5,
+        **_unused: Any,
+    ) -> SearchResult:
+        """Firecrawl web search — fallback provider (no answer synthesis)."""
+        payload: dict[str, Any] = {
+            "query": query,
+            "limit": max(1, min(int(max_results), SEARCH_MAX_RESULTS)),
+        }
+
+        data = await self._post(client, "/v2/search", payload)
+
+        # v2 wraps hits in data.web; older/self-hosted builds may use
+        # data.results — accept both shapes defensively.
+        page = data.get("data") or {}
+        hits = page.get("web") or page.get("results") or []
+
+        items: list[SearchResultItem] = []
+        for hit in hits:
+            items.append(
+                SearchResultItem(
+                    title=hit.get("title", ""),
+                    url=hit.get("url", ""),
+                    content=hit.get("description") or hit.get("markdown") or "",
+                    score=hit.get("score"),
+                )
+            )
+
+        return SearchResult(query=query, answer=None, results=items)
+
     # ----------------------------------------------------------------- helper
 
     async def _post(
@@ -82,7 +122,7 @@ class FirecrawlProvider:
     ) -> dict[str, Any]:
         try:
             resp = await client.post(
-                f"{FIRECRAWL_BASE}{path}",
+                f"{self._base_url}{path}",
                 json=payload,
                 headers={
                     "Authorization": f"Bearer {self._api_key}",
@@ -90,18 +130,14 @@ class FirecrawlProvider:
                 },
             )
         except httpx.HTTPError as exc:
-            raise ProviderError(
-                self.name, f"network error: {exc!s}", retriable=True
-            ) from exc
+            raise ProviderError(self.name, f"network error: {exc!s}", retriable=True) from exc
 
         if resp.status_code >= 400:
             msg, retriable = classify_http_error(self.name, resp.status_code)
             snippet = _safe_text(resp)
             if snippet:
                 msg = f"{msg} — {snippet}"
-            raise ProviderError(
-                self.name, msg, status_code=resp.status_code, retriable=retriable
-            )
+            raise ProviderError(self.name, msg, status_code=resp.status_code, retriable=retriable)
 
         try:
             return resp.json()
