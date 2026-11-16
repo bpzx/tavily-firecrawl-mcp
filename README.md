@@ -127,34 +127,6 @@ export TAVILY_BASE_URL=https://tavily-proxy.internal.example.com   # 如需代�
 
 ## 客户端配置
 
-### ZCode(`~/.zcode/cli/config.json` 用户级,或项目内 `<repo>/.zcode/config.json`)
-
-> 注意:ZCode 的 MCP 配置嵌套在 `mcp.servers` 下;所有作用域的 server 在会话启动时自动连接。状态与修复入口在客户端的 **Settings → MCP**。
-
-```json
-{
-  "mcp": {
-    "servers": {
-      "tavily-firecrawl": {
-        "type": "stdio",
-        "command": "uvx",
-        "args": ["tavily-firecrawl-mcp"],
-        "env": {
-          "TAVILY_API_KEY": "tvly-xxxxxxxxxxxx",
-          "FIRECRAWL_API_KEY": "fc-xxxxxxxxxxxx",
-          "WEB_FETCH_PROXY": "http://127.0.0.1:7890"
-        }
-      }
-    }
-  }
-}
-```
-
-> 【可选】从 git 运行:
-> ```json
-> "args": ["--from", "git+https://github.com/bpzx/tavily-firecrawl-mcp", "tavily-firecrawl-mcp"]
-> ```
-
 ### Claude Desktop / Claude Code(`claude_desktop_config.json`)
 
 ```json
